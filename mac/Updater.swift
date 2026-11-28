@@ -50,12 +50,30 @@ final class Updater: ObservableObject {
         if FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue { u = u.appendingPathComponent("appcast.json") }
         return u
     }
-    private func fetch(_ u: URL) async throws -> Data {
-        if u.isFileURL { return try Data(contentsOf: u) }
-        var req = URLRequest(url: u); req.cachePolicy = .reloadIgnoringLocalCacheData; req.timeoutInterval = 20
-        let (d, resp) = try await URLSession.shared.data(for: req)
+    /// Remembers where a request was redirected, so the zip comes from the same release as the feed.
+    private final class Redirects: NSObject, URLSessionTaskDelegate {
+        var urls: [URL] = []
+        func urlSession(_ s: URLSession, task: URLSessionTask, willPerformHTTPRedirection r: HTTPURLResponse, newRequest req: URLRequest) async -> URLRequest? {
+            if let u = req.url { urls.append(u) }; return req
+        }
+    }
+    private(set) var feedBase: URL?
+    /// Fetches the feed. Web feeds get a cache-busting query (GitHub briefly caches "latest" after a release);
+    /// returns the data and the address the feed was really served from (e.g. …/releases/download/v2.0.2/appcast.json).
+    private func fetch(_ u: URL) async throws -> (Data, URL) {
+        if u.isFileURL { return (try Data(contentsOf: u), u) }
+        var c = URLComponents(url: u, resolvingAgainstBaseURL: false)
+        let items = (c?.queryItems ?? []) + [URLQueryItem(name: "t", value: String(Int(Date().timeIntervalSince1970)))]
+        c?.queryItems = items
+        var req = URLRequest(url: c?.url ?? u); req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData; req.timeoutInterval = 20
+        req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        let rec = Redirects()
+        let (d, resp) = try await URLSession.shared.data(for: req, delegate: rec)
         if let h = resp as? HTTPURLResponse, h.statusCode >= 400 { throw UpdateError("The update server answered \(h.statusCode).") }
-        return d
+        let sameHost = rec.urls.last { $0.host == u.host }                 // skip GitHub's signed storage URL
+        var base = sameHost ?? u
+        if var bc = URLComponents(url: base, resolvingAgainstBaseURL: false) { bc.query = nil; base = bc.url ?? base }
+        return (d, base)
     }
     private func resolve(_ r: Release, relativeTo feed: URL) -> URL? {
         if r.url.contains("://") { return URL(string: r.url) }
@@ -70,7 +88,9 @@ final class Updater: ObservableObject {
         state = .checking
         Task { @MainActor in
             do {
-                let r = try JSONDecoder().decode(Release.self, from: try await fetch(feed))
+                let (data, base) = try await fetch(feed)
+                let r = try JSONDecoder().decode(Release.self, from: data)
+                feedBase = base
                 lastChecked = Date()
                 state = r.build > Self.currentBuild ? .available(r) : .upToDate
             } catch {
@@ -81,7 +101,7 @@ final class Updater: ObservableObject {
 
     // MARK: install
     func install() {
-        guard case .available(let r) = state, let feed = feedURL(), let src = resolve(r, relativeTo: feed) else { return }
+        guard case .available(let r) = state, let feed = feedURL(), let src = resolve(r, relativeTo: feedBase ?? feed) else { return }
         let appURL = Bundle.main.bundleURL, dest = appURL.deletingLastPathComponent()
         guard FileManager.default.isWritableFile(atPath: dest.path) else {
             installError = "FreeOffice can't write to \(dest.path). Move the apps to Applications (or another folder you own) and try again."; return
