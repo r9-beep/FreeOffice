@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Data</title><link rel="stylesheet" href="style.css">
+<style>
+#main { display:flex; height:calc(100vh - 50px); }
+#side { width:200px; background:var(--bar); border-right:1px solid var(--line); padding:10px; overflow:auto; }
+#side .t { display:flex; justify-content:space-between; padding:6px 8px; border-radius:6px; cursor:pointer; }
+#side .t:hover { background:var(--bg) } #side .t.on { background:var(--accent); color:#fff }
+#side h4 { margin:4px 8px 8px; font-size:11px; text-transform:uppercase; opacity:.6; letter-spacing:.06em }
+#content { flex:1; display:flex; flex-direction:column; min-width:0 }
+.tabs { display:flex; gap:6px; padding:8px 12px; border-bottom:1px solid var(--line); background:var(--bar); align-items:center; flex-wrap:wrap }
+.tabs .on { border-color:var(--accent); color:var(--accent) }
+.tabs input[type=text] { font:inherit; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+#view { flex:1; overflow:auto }
+table { border-collapse:collapse; font-size:13px; min-width:100% }
+th, td { border:1px solid var(--line); padding:0; white-space:nowrap }
+th { background:var(--bar); position:sticky; top:0; z-index:1; text-align:left; padding:5px 8px; font-weight:600; cursor:pointer; user-select:none }
+th small { opacity:.5; font-weight:400; margin-left:4px }
+th.n { width:40px; text-align:center; cursor:default; opacity:.6 }
+td { background:var(--bar) } td.n { text-align:center; opacity:.5; padding:0 6px }
+td input[type=text], td input[type=number], td input[type=date], td select { width:100%; min-width:110px; border:0; outline:0; padding:5px 8px; font:inherit; background:transparent; color:inherit; }
+td input:focus { background:rgba(59,108,246,.12) }
+td.c { text-align:center } td.c input { width:auto; min-width:0 }
+tr:hover td { background:var(--bg) }
+#q { width:100%; height:110px; font:13px/1.4 ui-monospace,Menlo,monospace; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bar); color:var(--fg); resize:vertical }
+.pad { padding:12px } .err { color:#d33; margin:8px 0 } .muted { opacity:.6; font-size:12px; margin:6px 0 }
+.rdonly td { padding:5px 8px }
+</style></head><body>
+<div class="top">
+  <a class="home" href="index.html">FreeOffice</a>
+  <input class="title" id="title" placeholder="Untitled database">
+  <span class="sep"></span>
+  <button id="importCsv">Import CSV as table</button><button id="exportCsv">Export table CSV</button><button id="exportJson">Export JSON</button>
+  <span class="status" id="status"></span>
+</div>
+<div id="main">
+  <div id="side"></div>
+  <div id="content">
+    <div class="tabs" id="tabs"></div>
+    <div id="view"></div>
+  </div>
+</div>
+<script src="common.js"></script>
+<script>
+const id = docId('data'), title = document.getElementById('title'), status = document.getElementById('status');
+const TYPES = ['text', 'number', 'date', 'checkbox'];
+const d = Store.load('data', id) || { title: '', tables: [{ id: 1, name: 'Contacts', fields: [{ id: 1, name: 'Name', type: 'text' }, { id: 2, name: 'Age', type: 'number' }, { id: 3, name: 'Joined', type: 'date' }, { id: 4, name: 'Active', type: 'checkbox' }],
+  rows: [{ id: 1, v: { 1: 'Ada Lovelace', 2: 36, 3: '2024-01-15', 4: true } }, { id: 2, v: { 1: 'Alan Turing', 2: 41, 3: '2024-03-02', 4: true } }, { id: 3, v: { 1: 'Grace Hopper', 2: 85, 3: '2023-11-30', 4: false } }] }] };
+title.value = d.title;
+let cur = d.tables[0].id, mode = 'grid', sort = null, filter = '', qText = 'SELECT * FROM Contacts WHERE Age > 30 ORDER BY Name', qOut = null;
+const save = debounce(() => { d.title = title.value; Store.save('data', id, d); document.title = d.title || 'Data'; status.textContent = 'Saved ' + new Date().toLocaleTimeString(); });
+title.oninput = save;
+const T = () => d.tables.find(t => t.id === cur) || d.tables[0];
+const nid = a => Math.max(0, ...a.map(x => x.id)) + 1;
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function renderSide() {
+  document.getElementById('side').innerHTML = '<h4>Tables</h4>' + d.tables.map(t => `<div class="t ${t.id === T().id ? 'on' : ''}" data-id="${t.id}"><span>${esc(t.name)}</span><small>${t.rows.length}</small></div>`).join('') + '<button id="addT" style="margin:8px">+ Table</button>';
+  document.getElementById('side').onclick = e => { const t = e.target.closest('.t'); if (t) { cur = +t.dataset.id; sort = null; filter = ''; mode = mode === 'query' ? 'query' : 'grid'; render(); } };
+  document.getElementById('addT').onclick = () => { const n = prompt('Table name'); if (!n) return; const t = { id: nid(d.tables), name: n, fields: [{ id: 1, name: 'Name', type: 'text' }], rows: [] }; d.tables.push(t); cur = t.id; save(); render(); };
+}
+function renderTabs() {
+  const t = T();
+  document.getElementById('tabs').innerHTML = `<button data-m="grid" class="${mode === 'grid' ? 'on' : ''}">Table</button><button data-m="query" class="${mode === 'query' ? 'on' : ''}">Query (SQL)</button><span class="sep"></span>` +
+    (mode === 'grid' ? `<input type="text" id="flt" placeholder="Filter rows…" value="${esc(filter)}"><button id="addRow">+ Row</button><button id="addField">+ Field</button><button id="renT">Rename table</button><button id="delT">Delete table</button>` : '');
+  document.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { mode = b.dataset.m; render(); });
+  const on = (i, f) => { const n = document.getElementById(i); if (n) n.onclick = f; };
+  const flt = document.getElementById('flt'); if (flt) flt.oninput = () => { filter = flt.value; renderGrid(); };
+  on('addRow', () => { t.rows.push({ id: nid(t.rows), v: {} }); save(); render(); });
+  on('addField', () => { const n = prompt('Field name'); if (!n) return; const ty = (prompt('Type: ' + TYPES.join(', '), 'text') || 'text').toLowerCase(); t.fields.push({ id: nid(t.fields), name: n, type: TYPES.includes(ty) ? ty : 'text' }); save(); render(); });
+  on('renT', () => { const n = prompt('Table name', t.name); if (n) { t.name = n; save(); render(); } });
+  on('delT', () => { if (d.tables.length > 1 && confirm(`Delete table "${t.name}" and its ${t.rows.length} rows?`)) { d.tables = d.tables.filter(x => x !== t); cur = d.tables[0].id; save(); render(); } else if (d.tables.length <= 1) alert('A database needs at least one table.'); });
+}
+function cellHTML(f, r) {
+  const v = r.v[f.id];
+  if (f.type === 'checkbox') return `<td class="c"><input type="checkbox" data-r="${r.id}" data-f="${f.id}" ${v ? 'checked' : ''}></td>`;
+  return `<td><input type="${f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'}" data-r="${r.id}" data-f="${f.id}" value="${esc(v)}"></td>`;
+}
+function rows() {
+  const t = T(); let rs = t.rows.slice();
+  if (filter) { const q = filter.toLowerCase(); rs = rs.filter(r => t.fields.some(f => String(r.v[f.id] ?? '').toLowerCase().includes(q))); }
+  if (sort) rs.sort((a, b) => { const x = a.v[sort.f] ?? '', y = b.v[sort.f] ?? ''; return (x < y ? -1 : x > y ? 1 : 0) * sort.dir; });
+  return rs;
+}
+function renderGrid() {
+  const t = T(), rs = rows(), view = document.getElementById('view');
+  view.innerHTML = `<table><thead><tr><th class="n">#</th>${t.fields.map(f => `<th data-f="${f.id}" title="Click to sort • double-click to edit field">${esc(f.name)}<small>${f.type}</small>${sort && sort.f === f.id ? (sort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}<th class="n"></th></tr></thead><tbody>` +
+    rs.map((r, i) => `<tr><td class="n">${i + 1}</td>${t.fields.map(f => cellHTML(f, r)).join('')}<td class="n"><button data-del="${r.id}">✕</button></td></tr>`).join('') + '</tbody></table>' +
+    `<div class="muted pad">${rs.length} of ${t.rows.length} rows</div>`;
+  view.querySelectorAll('th[data-f]').forEach(th => { th.onclick = () => { const f = +th.dataset.f; sort = sort && sort.f === f ? (sort.dir > 0 ? { f, dir: -1 } : null) : { f, dir: 1 }; renderGrid(); };
+    th.ondblclick = () => editField(t.fields.find(x => x.id === +th.dataset.f)); });
+  view.oninput = e => { const i = e.target; if (!i.dataset.r) return; const r = t.rows.find(x => x.id === +i.dataset.r), f = t.fields.find(x => x.id === +i.dataset.f);
+    r.v[f.id] = f.type === 'checkbox' ? i.checked : f.type === 'number' ? (i.value === '' ? null : +i.value) : i.value; save(); };
+  view.onclick = e => { const b = e.target.closest('[data-del]'); if (b) { t.rows = t.rows.filter(r => r.id !== +b.dataset.del); save(); render(); } };
+}
+function editField(f) {
+  const a = prompt(`Field "${f.name}" — type a new name, or "delete" to remove it.\n(Type: ${f.type}. To change type enter name:type, e.g. Age:number)`, f.name); if (a == null) return;
+  const t = T();
+  if (a.trim().toLowerCase() === 'delete') { if (t.fields.length > 1 && confirm('Delete this field and its data?')) { t.fields = t.fields.filter(x => x !== f); } else return; }
+  else { const [n, ty] = a.split(':'); if (n.trim()) f.name = n.trim(); if (ty && TYPES.includes(ty.trim())) f.type = ty.trim(); }
+  save(); render();
+}
+
+// ---- tiny SQL engine: SELECT cols|*|aggregates FROM t [WHERE ...] [GROUP BY c] [ORDER BY c [DESC]] [LIMIT n] ----
+function runSQL(sql) {
+  const m = /^\s*select\s+(.+?)\s+from\s+("[^"]+"|\S+)(?:\s+where\s+(.+?))?(?:\s+group\s+by\s+(\S+))?(?:\s+order\s+by\s+(\S+)(?:\s+(asc|desc))?)?(?:\s+limit\s+(\d+))?\s*;?\s*$/is.exec(sql);
+  if (!m) throw new Error('Syntax: SELECT cols FROM table [WHERE …] [GROUP BY col] [ORDER BY col [DESC]] [LIMIT n]');
+  const [, sel, tn, where, group, order, dir, limit] = m;
+  const t = d.tables.find(x => x.name.toLowerCase() === tn.replace(/"/g, '').toLowerCase()); if (!t) throw new Error('No such table: ' + tn);
+  const col = n => { const f = t.fields.find(x => x.name.toLowerCase() === n.replace(/"/g, '').trim().toLowerCase()); if (!f) throw new Error('No such field: ' + n); return f; };
+  let rs = t.rows.map(r => Object.fromEntries(t.fields.map(f => [f.name, r.v[f.id] ?? null])));
+  if (where) {
+    const test = c => { const mm = /^\s*("[^"]+"|[\w ]+?)\s*(>=|<=|<>|!=|=|>|<|\blike\b)\s*('([^']*)'|"([^"]*)"|[-\d.]+|true|false|null)\s*$/i.exec(c);
+      if (!mm) throw new Error('Bad condition: ' + c); const f = col(mm[1]), op = mm[2].toLowerCase(); let val = mm[4] ?? mm[5] ?? mm[3];
+      if (mm[4] === undefined && mm[5] === undefined) val = /^true$/i.test(val) ? true : /^false$/i.test(val) ? false : /^null$/i.test(val) ? null : +val;
+      return r => { const x = r[f.name]; switch (op) { case '=': return x == val; case '!=': case '<>': return x != val; case '>': return x > val; case '<': return x < val; case '>=': return x >= val; case '<=': return x <= val;
+        case 'like': return new RegExp('^' + String(val).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*').replace(/_/g, '.') + '$', 'i').test(String(x ?? '')); } }; };
+    const ors = where.split(/\s+or\s+/i).map(g => g.split(/\s+and\s+/i).map(test)); rs = rs.filter(r => ors.some(g => g.every(f => f(r))));
+  }
+  const items = sel.split(',').map(s => s.trim()), agg = items.some(s => /^(count|sum|avg|min|max)\s*\(/i.test(s));
+  let out, cols;
+  if (agg || group) {
+    const gcol = group ? col(group).name : null, groups = new Map();
+    rs.forEach(r => { const k = gcol ? r[gcol] : '_'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+    if (!rs.length && !gcol) groups.set('_', []);
+    cols = items.map(s => s); out = [...groups.entries()].map(([k, g]) => items.map(s => {
+      const a = /^(count|sum|avg|min|max)\s*\(\s*(\*|[^)]+)\)$/i.exec(s);
+      if (!a) { if (gcol && col(s).name === gcol) return k; throw new Error('Non-aggregate column "' + s + '" must be the GROUP BY column'); }
+      const fn = a[1].toLowerCase(), vals = a[2] === '*' ? g : g.map(r => r[col(a[2]).name]).filter(v => v != null);
+      if (fn === 'count') return vals.length; const nums = vals.map(Number).filter(n => !isNaN(n)); if (!nums.length) return null;
+      return fn === 'sum' ? nums.reduce((x, y) => x + y, 0) : fn === 'avg' ? Math.round(nums.reduce((x, y) => x + y, 0) / nums.length * 1e4) / 1e4 : fn === 'min' ? Math.min(...nums) : Math.max(...nums); }));
+    if (order) { const i = cols.findIndex(c => c.toLowerCase() === order.toLowerCase()); if (i >= 0) out.sort((a, b) => (a[i] < b[i] ? -1 : a[i] > b[i] ? 1 : 0) * (dir && dir.toLowerCase() === 'desc' ? -1 : 1)); }
+  } else {
+    if (order) { const f = col(order); rs.sort((a, b) => ((a[f.name] ?? '') < (b[f.name] ?? '') ? -1 : (a[f.name] ?? '') > (b[f.name] ?? '') ? 1 : 0) * (dir && dir.toLowerCase() === 'desc' ? -1 : 1)); }
+    cols = items[0] === '*' ? t.fields.map(f => f.name) : items.map(s => col(s).name); out = rs.map(r => cols.map(c => r[c]));
+  }
+  if (limit) out = out.slice(0, +limit);
+  return { cols, rows: out };
+}
+function renderQuery() {
+  const v = document.getElementById('view');
+  v.innerHTML = `<div class="pad"><textarea id="q" spellcheck="false">${esc(qText)}</textarea><div style="margin:8px 0"><button id="run">▶ Run (⌘↵)</button> <button id="qcsv">Export result CSV</button></div>
+  <div class="muted">Tables: ${d.tables.map(t => esc(t.name) + ' (' + t.fields.map(f => esc(f.name)).join(', ') + ')').join(' • ')}</div>
+  <div class="muted">Supports WHERE (=, !=, &gt;, &lt;, LIKE, AND, OR), COUNT/SUM/AVG/MIN/MAX, GROUP BY, ORDER BY, LIMIT. Read-only.</div><div id="qout"></div></div>`;
+  const run = () => { qText = document.getElementById('q').value; const o = document.getElementById('qout');
+    try { qOut = runSQL(qText); o.innerHTML = `<table class="rdonly"><thead><tr>${qOut.cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${qOut.rows.map(r => `<tr>${r.map(x => `<td>${esc(x === true ? '✓' : x === false ? '' : x)}</td>`).join('')}</tr>`).join('')}</tbody></table><div class="muted">${qOut.rows.length} row(s)</div>`; }
+    catch (e) { qOut = null; o.innerHTML = `<div class="err">${esc(e.message)}</div>`; } };
+  document.getElementById('run').onclick = run;
+  document.getElementById('q').onkeydown = e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') run(); };
+  document.getElementById('qcsv').onclick = () => { if (qOut) download('query.csv', toCSV([qOut.cols, ...qOut.rows]), 'text/csv'); };
+  run();
+}
+const toCSV = rows => rows.map(r => r.map(x => { const s = x == null ? '' : String(x); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }).join(',')).join('\n');
+function parseCSV(t) { const rows = []; let r = [], f = '', q = false;
+  for (let i = 0; i < t.length; i++) { const ch = t[i];
+    if (q) { if (ch === '"') { if (t[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += ch; }
+    else if (ch === '"') q = true; else if (ch === ',') { r.push(f); f = ''; } else if (ch === '\n') { r.push(f); rows.push(r); r = []; f = ''; } else if (ch !== '\r') f += ch; }
+  if (f !== '' || r.length) { r.push(f); rows.push(r); } return rows.filter(r => r.some(x => x !== '')); }
+document.getElementById('exportCsv').onclick = () => { const t = T(); download(t.name + '.csv', toCSV([t.fields.map(f => f.name), ...t.rows.map(r => t.fields.map(f => r.v[f.id]))]), 'text/csv'); };
+document.getElementById('exportJson').onclick = () => download((d.title || 'database') + '.json', JSON.stringify(Object.fromEntries(d.tables.map(t => [t.name, t.rows.map(r => Object.fromEntries(t.fields.map(f => [f.name, r.v[f.id] ?? null])))])), null, 2), 'application/json');
+document.getElementById('importCsv').onclick = () => pickFile('.csv,.txt', (txt, name) => {
+  const rs = parseCSV(txt); if (!rs.length) return alert('That file is empty.');
+  const head = rs[0], body = rs.slice(1);
+  const fields = head.map((h, i) => { const vals = body.map(r => r[i]).filter(x => x !== '' && x != null);
+    const type = vals.length && vals.every(x => !isNaN(x)) ? 'number' : vals.length && vals.every(x => /^\d{4}-\d{2}-\d{2}$/.test(x)) ? 'date' : 'text'; return { id: i + 1, name: h || 'Field ' + (i + 1), type }; });
+  const t = { id: nid(d.tables), name: name.replace(/\.\w+$/, ''), fields, rows: body.map((r, ri) => ({ id: ri + 1, v: Object.fromEntries(fields.map((f, i) => [f.id, r[i] === '' || r[i] == null ? null : f.type === 'number' ? +r[i] : r[i]])) })) };
+  d.tables.push(t); cur = t.id; mode = 'grid'; save(); render(); });
+function render() { renderSide(); renderTabs(); mode === 'grid' ? renderGrid() : renderQuery(); }
+render();
+</script></body></html>

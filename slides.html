@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Slides</title><link rel="stylesheet" href="style.css">
+<style>
+#main { display:flex; height:calc(100vh - 50px); }
+#thumbs { width:190px; overflow:auto; padding:10px; background:var(--bar); border-right:1px solid var(--line); }
+.th { aspect-ratio:16/9; border:2px solid var(--line); border-radius:6px; margin-bottom:10px; padding:6px; font-size:9px; overflow:hidden; cursor:pointer; background:#fff; color:#111; }
+.th.on { border-color:var(--accent); } .th b { display:block; font-size:11px; }
+#stage { flex:1; display:flex; align-items:center; justify-content:center; padding:20px; overflow:auto; }
+.slide { width:min(100%, 960px); aspect-ratio:16/9; background:#fff; color:#111; box-shadow:0 2px 12px rgba(0,0,0,.3); padding:6% 7%; display:flex; flex-direction:column; gap:3%; }
+.slide [contenteditable] { outline:none; } .slide [contenteditable]:focus { background:rgba(59,108,246,.08); }
+.slide .t { font-size:clamp(20px,4.2vw,44px); font-weight:700; } .slide .b { font-size:clamp(14px,2.2vw,24px); white-space:pre-wrap; flex:1; }
+.slide.dark { background:#14213d; color:#fff; } .slide.accent { background:#3b6cf6; color:#fff; }
+#present { position:fixed; inset:0; background:#000; display:none; align-items:center; justify-content:center; z-index:50; }
+#present .slide { width:min(100vw, 177.7vh); box-shadow:none; }
+</style></head><body>
+<div class="top">
+  <a class="home" href="index.html">FreeOffice</a>
+  <input class="title" id="title" placeholder="Untitled presentation">
+  <span class="sep"></span>
+  <button id="add">+ Slide</button><button id="dup">Duplicate</button><button id="del">Delete</button>
+  <select id="theme"><option value="">Light</option><option value="dark">Dark</option><option value="accent">Accent</option></select>
+  <button id="play">▶ Present</button><button id="export">Export .html</button>
+  <span class="status" id="status"></span>
+</div>
+<div id="main"><div id="thumbs"></div><div id="stage"></div></div>
+<div id="present"></div>
+<script src="common.js"></script>
+<script>
+const id = docId('slides'), title = document.getElementById('title'), status = document.getElementById('status');
+const d = Store.load('slides', id) || { title: '', slides: [{ t: 'Your title', b: 'Click to edit • Add slides on the left', theme: '' }] };
+let cur = 0; title.value = d.title; document.title = d.title || 'Slides';
+const save = debounce(() => { Store.save('slides', id, d); document.title = d.title || 'Slides'; status.textContent = 'Saved ' + new Date().toLocaleTimeString(); });
+title.oninput = () => { d.title = title.value; save(); };
+const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const slideHTML = (s, ed) => `<div class="slide ${s.theme}"><div class="t" ${ed ? 'contenteditable data-k="t"' : ''}>${esc(s.t)}</div><div class="b" ${ed ? 'contenteditable data-k="b"' : ''}>${esc(s.b)}</div></div>`;
+function thumbs() { document.getElementById('thumbs').innerHTML = d.slides.map((s, i) => `<div class="th ${i === cur ? 'on' : ''}" data-i="${i}"><b>${i + 1}. ${esc(s.t)}</b>${esc(s.b.slice(0, 80))}</div>`).join(''); }
+function stage() {
+  cur = Math.min(cur, d.slides.length - 1);
+  const st = document.getElementById('stage'); st.innerHTML = slideHTML(d.slides[cur], true);
+  st.querySelectorAll('[contenteditable]').forEach(el => el.oninput = () => { d.slides[cur][el.dataset.k] = el.innerText; save(); thumbs(); });
+  document.getElementById('theme').value = d.slides[cur].theme; thumbs();
+}
+document.getElementById('thumbs').onclick = e => { const t = e.target.closest('.th'); if (t) { cur = +t.dataset.i; stage(); } };
+document.getElementById('add').onclick = () => { d.slides.splice(cur + 1, 0, { t: 'New slide', b: '', theme: d.slides[cur].theme }); cur++; save(); stage(); };
+document.getElementById('dup').onclick = () => { d.slides.splice(cur + 1, 0, { ...d.slides[cur] }); cur++; save(); stage(); };
+document.getElementById('del').onclick = () => { if (d.slides.length > 1) { d.slides.splice(cur, 1); save(); stage(); } };
+document.getElementById('theme').onchange = e => { d.slides[cur].theme = e.target.value; save(); stage(); };
+const pres = document.getElementById('present');
+function showP() { pres.innerHTML = slideHTML(d.slides[cur], false); }
+document.getElementById('play').onclick = () => { pres.style.display = 'flex'; showP(); pres.requestFullscreen?.().catch(() => {}); };
+function stopP() { pres.style.display = 'none'; if (document.fullscreenElement) document.exitFullscreen(); stage(); }
+pres.onclick = () => { if (cur < d.slides.length - 1) { cur++; showP(); } else stopP(); };
+document.addEventListener('keydown', e => {
+  if (pres.style.display !== 'flex') return;
+  if (e.key === 'Escape') stopP();
+  else if (['ArrowRight', ' ', 'PageDown'].includes(e.key)) { cur = Math.min(cur + 1, d.slides.length - 1); showP(); }
+  else if (['ArrowLeft', 'PageUp'].includes(e.key)) { cur = Math.max(cur - 1, 0); showP(); }
+});
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && pres.style.display === 'flex') stopP(); });
+document.getElementById('export').onclick = () => download((d.title || 'slides') + '.html', `<!doctype html><meta charset="utf-8"><title>${esc(d.title)}</title><style>body{margin:0;font-family:system-ui;background:#000}.slide{width:100vw;height:100vh;padding:6% 7%;box-sizing:border-box;background:#fff;color:#111;display:none;flex-direction:column;gap:3%}.slide.on{display:flex}.slide.dark{background:#14213d;color:#fff}.slide.accent{background:#3b6cf6;color:#fff}.t{font-size:5vw;font-weight:700}.b{font-size:2.6vw;white-space:pre-wrap}</style>${d.slides.map(s => `<div class="slide ${s.theme}"><div class="t">${esc(s.t)}</div><div class="b">${esc(s.b)}</div></div>`).join('')}<script>let i=0,s=document.querySelectorAll('.slide');function g(n){i=Math.max(0,Math.min(s.length-1,n));s.forEach((e,j)=>e.classList.toggle('on',j==i))}g(0);onkeydown=e=>{if(['ArrowRight',' '].includes(e.key))g(i+1);if(e.key=='ArrowLeft')g(i-1)};onclick=()=>g(i+1)<\/script>`, 'text/html');
+stage();
+</script></body></html>

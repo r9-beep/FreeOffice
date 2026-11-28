@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Writer</title><link rel="stylesheet" href="style.css">
+<style>
+.page { max-width:816px; min-height:1056px; margin:20px auto; background:#fff; color:#111; padding:72px; box-shadow:0 1px 6px rgba(0,0,0,.25); outline:none; font:16px/1.6 Georgia, serif; }
+@media print { .top { display:none } body { background:#fff } .page { box-shadow:none; margin:0; padding:0; max-width:none } }
+</style></head><body>
+<div class="top">
+  <a class="home" href="index.html">FreeOffice</a>
+  <input class="title" id="title" placeholder="Untitled document">
+  <span class="sep"></span>
+  <select id="block"><option value="p">Paragraph</option><option value="h1">Heading 1</option><option value="h2">Heading 2</option><option value="h3">Heading 3</option><option value="blockquote">Quote</option></select>
+  <button data-c="bold"><b>B</b></button><button data-c="italic"><i>I</i></button><button data-c="underline"><u>U</u></button><button data-c="strikeThrough"><s>S</s></button>
+  <span class="sep"></span>
+  <button data-c="justifyLeft">⟸</button><button data-c="justifyCenter">≡</button><button data-c="justifyRight">⟹</button>
+  <button data-c="insertUnorderedList">• List</button><button data-c="insertOrderedList">1. List</button>
+  <button id="link">Link</button><button id="img">Image</button>
+  <input type="color" id="color" title="Text colour" value="#000000">
+  <span class="sep"></span>
+  <button id="open">Open</button><button id="saveHtml">Save .html</button><button id="print">Print / PDF</button>
+  <span class="status" id="status"></span>
+</div>
+<div class="page" id="page" contenteditable="true" spellcheck="true"></div>
+<script src="common.js"></script>
+<script>
+const id = docId('writer'), page = document.getElementById('page'), title = document.getElementById('title'), status = document.getElementById('status');
+const d = Store.load('writer', id) || { title: '', html: '<h1>Untitled</h1><p>Start writing…</p>' };
+title.value = d.title; page.innerHTML = d.html; document.title = (d.title || 'Writer');
+const save = debounce(() => { Store.save('writer', id, { title: title.value, html: page.innerHTML }); document.title = title.value || 'Writer'; status.textContent = 'Saved ' + new Date().toLocaleTimeString(); });
+page.addEventListener('input', save); title.addEventListener('input', save);
+const words = () => { const n = (page.innerText.trim().match(/\S+/g) || []).length; status.textContent = n + ' words'; };
+page.addEventListener('input', words); words();
+document.querySelectorAll('[data-c]').forEach(b => { b.onmousedown = e => e.preventDefault(); b.onclick = () => { document.execCommand(b.dataset.c); save(); }; });
+document.getElementById('block').onchange = e => { document.execCommand('formatBlock', false, e.target.value); page.focus(); save(); };
+document.getElementById('color').oninput = e => { document.execCommand('foreColor', false, e.target.value); save(); };
+document.getElementById('link').onclick = () => { const u = prompt('URL'); if (u) { document.execCommand('createLink', false, u); save(); } };
+document.getElementById('img').onclick = () => { const u = prompt('Image URL'); if (u) { document.execCommand('insertImage', false, u); save(); } };
+document.getElementById('print').onclick = () => print();
+document.getElementById('saveHtml').onclick = () => download((title.value || 'document') + '.html', `<!doctype html><meta charset="utf-8"><title>${title.value}</title><body style="max-width:720px;margin:2em auto;font:16px/1.6 Georgia,serif">${page.innerHTML}</body>`, 'text/html');
+document.getElementById('open').onclick = () => pickFile('.html,.htm,.txt,.md', (t, n) => { if (/\.html?$/.test(n)) { const x = new DOMParser().parseFromString(t, 'text/html'); page.innerHTML = x.body.innerHTML; } else page.innerText = t; title.value = n.replace(/\.\w+$/, ''); save(); });
+page.addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); save(); } });
+</script></body></html>

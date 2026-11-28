@@ -1,0 +1,13 @@
+# build output
+dist/
+build-tmp/
+*.zip
+appcast.json
+
+# macOS
+.DS_Store
+
+# Xcode / editors
+*.xcodeproj/xcuserdata/
+.vscode/
+.idea/
